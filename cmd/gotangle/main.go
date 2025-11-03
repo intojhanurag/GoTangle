@@ -19,6 +19,10 @@ import (
 	kad "github.com/libp2p/go-libp2p-kad-dht"
 	mdns "github.com/libp2p/go-libp2p/p2p/discovery/mdns"
 	ma "github.com/multiformats/go-multiaddr"
+	"github.com/yourname/gotangle/pkg/p2p"
+    "github.com/yourname/gotangle/pkg/storage"
+
+
 )
 
 // mdnsNotifee receives discovered peers from mdns and connects to them.
@@ -44,7 +48,7 @@ func main() {
 	ctx := context.Background()
 
 	// generate identity
-	priv, _, err := crypto.GenerateKeyPair(crypto.Ed25519, 0)
+	priv, _, err := storage.LoadOrCreateIdentity("./data")
 	if err != nil {
 		log.Fatalf("Failed to generate key: %v", err)
 	}
@@ -54,7 +58,12 @@ func main() {
 		libp2p.Identity(priv),
 		libp2p.ListenAddrStrings(fmt.Sprintf("/ip4/0.0.0.0/tcp/%d", *port)),
 	)
+	p2p.StartPingHandler(h)
+
+	// both peer inform to each other their identity
 	identify.NewIDService(h)
+
+	// for warm up the connection
 	ping.NewPingService(h)
 	if err != nil {
 		log.Fatalf("Failed to create libp2p host: %v", err)
@@ -101,6 +110,10 @@ func main() {
 	// periodically print connected peers
 	ticker := time.NewTicker(15 * time.Second)
 	go func() {
+		for {
+			time.Sleep(5 * time.Second)
+			_ = p2p.SendPing(ctx, h, info.ID)
+		}
 		for range ticker.C {
 			peers := h.Peerstore().Peers()
 			fmt.Printf("--- Peerstore peers (%d) ---\n", len(peers))
