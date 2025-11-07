@@ -1,0 +1,59 @@
+name: Monitor kubernetes/website triage/accepted
+
+on:
+  schedule:
+    - cron: '*/5 * * * *'  # every 5 minutes
+  workflow_dispatch:       # allows manual run
+
+jobs:
+  monitor_issues:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v3
+
+      - name: Setup dependencies
+        run: sudo apt-get update && sudo apt-get install -y jq mailutils
+
+      - name: Fetch triage/accepted issues
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          curl -s -H "Authorization: token $GITHUB_TOKEN" \
+          "https://api.github.com/repos/kubernetes/website/issues?labels=triage/accepted&state=open" \
+          -o issues.json
+
+      - name: Track new issues
+        env:
+          EMAIL_USER: ${{ secrets.EMAIL_USER }}
+          EMAIL_PASS: ${{ secrets.EMAIL_PASS }}
+          TO_EMAIL: ${{ secrets.TO_EMAIL }}
+        run: |
+          # Initialize seen_issues.txt if it doesn't exist
+          if [ ! -f seen_issues.txt ]; then
+            touch seen_issues.txt
+          fi
+
+          # Get current issue IDs
+          jq '.[].id' issues.json > current_ids.txt
+
+          # Find new issues
+          NEW=$(comm -23 <(sort current_ids.txt) <(sort seen_issues.txt) || true)
+
+          if [ -n "$NEW" ]; then
+            for id in $NEW; do
+              ISSUE=$(jq -r ".[] | select(.id==$id) | \"\(.title) \(.html_url)\"" issues.json)
+              echo "Sending email for: $ISSUE"
+              printf "Subject: New triage/accepted issue\n\n$ISSUE\n" | \
+                msmtp --host=smtp.gmail.com --port=465 --auth=on --user="$EMAIL_USER" --passwordeval="echo $EMAIL_PASS" --tls=on $TO_EMAIL
+            done
+          fi
+
+          # Update seen issues
+          mv current_ids.txt seen_issues.txt
+          git config user.name "github-actions"
+          git config user.email "actions@github.com"
+          git add seen_issues.txt
+          git commit -m "Update seen triage/accepted issues" || echo "No changes to commit"
+          git push origin HEAD
+
